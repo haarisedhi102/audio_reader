@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# reader — one article in, one synced glasses book out.
+#
+#   ./reader add article.pdf --title "Title" --author "Name"
+#   ./reader list
+#   ./reader serve
+set -euo pipefail
+cd "$(dirname "$0")"
+PY=.venv-tts/bin/python
+
+case "${1:-}" in
+  add)
+    shift
+    exec "$PY" scripts/build_book.py "$@"
+    ;;
+  extract)
+    shift
+    exec "$PY" scripts/build_book.py "$@" --extract-only
+    ;;
+  list)
+    "$PY" - <<'EOF'
+import json, pathlib
+p = pathlib.Path("library/index.json")
+if not p.exists():
+    print("library empty"); raise SystemExit
+for b in json.load(open(p))["books"]:
+    print(f"{b['id']:24s} {b['title'][:58]:58s} {len(b['tracks'])} part(s)")
+EOF
+    ;;
+  serve)
+    cd glasses-reader && exec npm run dev
+    ;;
+  sim)
+    cd glasses-reader && exec npx evenhub-simulator "http://localhost:5173${2:-}"
+    ;;
+  test)
+    cd glasses-reader && exec node scripts/smoke.mjs
+    ;;
+  *)
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac

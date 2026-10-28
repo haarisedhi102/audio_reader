@@ -1,0 +1,36 @@
+# secrets
+.env
+.env.*
+
+# python
+.venv-tts/
+__pycache__/
+*.pyc
+
+# node
+node_modules/
+dist/
+
+# generated media and build output (hundreds of MB)
+audio/
+work/
+*.wav
+*.mp3
+*.m4a
+*.ehpk
+glasses-reader/dev-qr.png
+
+# book content: copyrighted, and the deliverable lives on this machine
+library/
+*.pdf
+narration*.txt
+A_Turkish_Archer_On_The_Tracks_Of_His_An.md
+A_Turkish_Archer_On_The_Tracks_Of_His_An.txt
+Okculuk_ve_Hat_Sanati_EN.md
+The_Spiritual_in_Islamic_calligraphy.md
+
+# os
+.DS_Store
+
+# local assistant state
+.commandcode/

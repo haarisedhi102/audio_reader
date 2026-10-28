@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glasses Reader</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #101010; color: #e8e8e8;
+           font: 15px/1.5 -apple-system, system-ui, sans-serif; }
+    main { max-width: 620px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+    p.sub { margin: 0 0 18px; color: #8b8b8b; font-size: 13px; }
+    .book { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+            width: 100%; text-align: left; background: #1a1a1a; color: inherit;
+            border: 1px solid #262626; border-radius: 10px; padding: 11px 13px;
+            margin-bottom: 8px; font: inherit; cursor: pointer; }
+    .book span { color: #7d7d7d; font-size: 12px; }
+    .book.on { border-color: #2f6b3a; background: #16201a; }
+    #now { background: #141414; border: 1px solid #242424; border-radius: 10px;
+           padding: 12px; min-height: 44px; font-size: 14px; color: #cfcfcf; margin: 16px 0; }
+    .row { display: flex; align-items: center; gap: 12px; }
+    #play { width: 46px; height: 46px; border-radius: 23px; border: 0;
+            background: #2f6b3a; color: #fff; font-size: 16px; cursor: pointer; }
+    #scrub { flex: 1; accent-color: #2f6b3a; }
+    #status { color: #6f6f6f; font-size: 12px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Glasses Reader</h1>
+    <p class="sub">The audio clock drives the glasses — no microphone, no feedback loop.</p>
+    <div id="books"></div>
+    <div id="now"></div>
+    <div class="row">
+      <button id="play">▶︎</button>
+      <input id="scrub" type="range" min="0" max="100" value="0" step="0.5" />
+    </div>
+    <div id="status">loading…</div>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
