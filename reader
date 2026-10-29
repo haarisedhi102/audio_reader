@@ -3,6 +3,8 @@
 #
 #   ./reader add article.pdf --title "Title" --author "Name"
 #   ./reader list
+#   ./reader publish [--dry-run|--stage-only]
+#   ./reader pack [--no-bump]      build + package the glasses app
 #   ./reader serve
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -26,6 +28,30 @@ if not p.exists():
 for b in json.load(open(p))["books"]:
     print(f"{b['id']:24s} {b['title'][:58]:58s} {len(b['tracks'])} part(s)")
 EOF
+    ;;
+  publish)
+    shift
+    exec "$PY" scripts/publish.py "$@"
+    ;;
+  pack)
+    shift
+    BASE=$(sed -n 's/^PUBLIC_BASE_URL=//p' .env | head -1 | tr -d '"'"'")
+    [ -n "$BASE" ] || { echo "PUBLIC_BASE_URL missing from .env" >&2; exit 1; }
+    if [ "${1:-}" != "--no-bump" ]; then
+      "$PY" - <<'EOF'
+import json, pathlib
+for name in ("glasses-reader/app.json", "glasses-reader/package.json"):
+    p = pathlib.Path(name)
+    d = json.loads(p.read_text())
+    parts = d["version"].split(".")
+    parts[-1] = str(int(parts[-1]) + 1)
+    d["version"] = ".".join(parts)
+    p.write_text(json.dumps(d, indent=2) + "\n")
+print("version", json.loads(pathlib.Path("glasses-reader/app.json").read_text())["version"])
+EOF
+    fi
+    ( cd glasses-reader && VITE_LIB_BASE="$BASE/library" npm run build:prod && npm run pack )
+    ls -lh glasses-reader/glasses-reader.ehpk | awk '{print "→", $9, $5}'
     ;;
   serve)
     cd glasses-reader && exec npm run dev

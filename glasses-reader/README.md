@@ -63,6 +63,8 @@ Useful query params: `?book=thesis&track=2&seek=300`
 |---|---|
 | Tap | play / pause |
 | Swipe up / down | seek −30 s / +30 s |
+| Long-press | hide/show the text — playback continues; any tap brings it back |
+| Menu (from the glasses' own long-press) | Hide text / Show text / Exit — the phone's `hide` button always works, even if the OS claims the press |
 | Double-tap | exit |
 
 ## Layout on the glasses

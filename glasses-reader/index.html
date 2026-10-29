@@ -23,20 +23,26 @@
     #play { width: 46px; height: 46px; border-radius: 23px; border: 0;
             background: #2f6b3a; color: #fff; font-size: 16px; cursor: pointer; }
     #scrub { flex: 1; accent-color: #2f6b3a; }
+    #hide { height: 46px; padding: 0 14px; border-radius: 23px; border: 1px solid #2a2a2a;
+            background: #1a1a1a; color: #cfcfcf; font: inherit; cursor: pointer; }
     #status { color: #6f6f6f; font-size: 12px; margin-top: 12px; }
+    #ver { color: #4f8a5c; font-size: 13px; }
+    #events { color: #5a5a5a; font-size: 11px; font-family: ui-monospace, monospace; margin-top: 6px; }
   </style>
 </head>
 <body>
   <main>
-    <h1>Glasses Reader</h1>
+    <h1>Glasses Reader <span id="ver"></span></h1>
     <p class="sub">The audio clock drives the glasses — no microphone, no feedback loop.</p>
     <div id="books"></div>
     <div id="now"></div>
     <div class="row">
       <button id="play">▶︎</button>
       <input id="scrub" type="range" min="0" max="100" value="0" step="0.5" />
+      <button id="hide">hide</button>
     </div>
     <div id="status">loading…</div>
+    <div id="events"></div>
   </main>
   <script type="module" src="/src/main.ts"></script>
 </body>

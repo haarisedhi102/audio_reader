@@ -1,11 +1,13 @@
 {
   "name": "glasses-reader",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.20",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
+    "build:prod": "test -n \"$VITE_LIB_BASE\" || { echo 'set VITE_LIB_BASE first'; exit 1; }; tsc --noEmit && vite build",
+    "pack": "npx @evenrealities/evenhub-cli pack app.json dist -o glasses-reader.ehpk",
     "preview": "vite preview --host"
   },
   "dependencies": {

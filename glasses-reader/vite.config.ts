@@ -1,12 +1,12 @@
 import { defineConfig, type Plugin } from 'vite'
 import { resolve, join, normalize, extname } from 'node:path'
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream, readFileSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 // The library (books + index.json) and the narration audio live outside this
 // app folder. Serve them directly in dev/preview so adding an article never
 // requires a rebuild or a copy.
-const ROOT = resolve(__dirname, '..')
+const ROOT = resolve(import.meta.dirname, '..')
 const MOUNTS: Record<string, string> = {
   '/library': resolve(ROOT, 'library'),
   '/audio': resolve(ROOT, 'audio'),
@@ -79,9 +79,12 @@ function serveLibrary(): Plugin {
   }
 }
 
+const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf8'))
+
 export default defineConfig({
   plugins: [serveLibrary()],
   publicDir: false,
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   server: { host: true, fs: { allow: [ROOT] } },
   build: { target: 'es2022' },
 })

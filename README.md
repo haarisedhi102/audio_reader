@@ -5,11 +5,17 @@ Even Realities G2 in sync with the audio.
 
 ```bash
 ./reader add article.pdf --title "Title" --author "Name"
-./reader serve                 # then open http://localhost:5173
+./reader publish               # transcode + upload to R2, then listen anywhere
+./reader pack                  # bump, build against R2, package glasses-reader.ehpk
+./reader serve                 # or open http://localhost:5173
 ./reader sim                   # or drive the Even Hub simulator
 ```
 
 `./reader add` prints a `?book=<id>` link at the end.
+
+`./reader publish` is what makes the library portable: it stages a 64 kbps
+`+faststart` copy and syncs it to S3-compatible storage, so playback needs no
+process running here. Setup: `docs/hosting.md`.
 
 ## What happens
 
@@ -79,6 +85,8 @@ manifest entry.
 |---|---|
 | Tap | play / pause |
 | Swipe up / down | −30 s / +30 s |
+| Long-press | hide/show the text — playback continues; any tap brings it back |
+| Menu (from the glasses' own long-press) | Hide text / Show text / Exit — the phone's `hide` button always works, even if the OS claims the press |
 | Double-tap | exit |
 
 ## Requirements
@@ -97,4 +105,7 @@ manifest entry.
 - `./reader extract <file>` stops after extraction, for proof-reading before you
   spend synthesis time.
 - A packed `.ehpk` runs from the app origin, not the dev server: build it with
-  `VITE_LIB_BASE=http://<lan-ip>:5173/library` so it can reach the library.
+  `VITE_LIB_BASE=<public host>/library npm run build:prod && npm run pack`. The
+  base is baked in at build time, and `build:prod` refuses to build without it.
+- Publishing stages into `.publish/` (gitignored) and never modifies `library/`
+  or `audio/`; re-publishing only re-encodes files whose source changed.

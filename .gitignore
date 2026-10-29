@@ -14,6 +14,7 @@ dist/
 # generated media and build output (hundreds of MB)
 audio/
 work/
+.publish/
 *.wav
 *.mp3
 *.m4a
