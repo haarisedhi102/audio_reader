@@ -45,11 +45,19 @@ def ocr_lines(png, tessdata=None):
     if dir_:
         cmd += ["--tessdata-dir", dir_]
     cmd += ["tsv"]
-    subprocess.run(cmd, capture_output=True)
     tsv = base + ".tsv"
-    if not os.path.exists(tsv) or os.path.getsize(tsv) == 0:
+    if os.path.exists(tsv):
+        os.remove(tsv)                                  # never read a stale result
+    try:
+        r = subprocess.run(cmd, capture_output=True)
+    except FileNotFoundError:
+        print("  tesseract not found", file=sys.stderr)
         return []
-    rows = list(csv.reader(open(tsv), delimiter="\t"))[1:]
+    if r.returncode != 0 or not os.path.exists(tsv) or os.path.getsize(tsv) == 0:
+        print(f"  tesseract failed on {os.path.basename(png)}", file=sys.stderr)
+        return []
+    with open(tsv, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE))[1:]
     lines = {}
     for r in rows:
         if len(r) < 12 or r[0] != "5":
@@ -153,11 +161,14 @@ def vlm_lines(png: str) -> list[str]:
                  "--image", png, "--prompt", VLM_PROMPT, "--max-tokens", "4096",
                  "--temp", "0"],
                 capture_output=True, text=True, timeout=600)
+            if r.returncode != 0 or not r.stdout.strip():
+                print(f"  vlm ocr failed (exit {r.returncode})", file=sys.stderr)
+                return []
             text = r.stdout
         except Exception as e:
             print(f"  vlm ocr failed: {e}", file=sys.stderr)
             return []
-        open(cache, "w").write(text)
+        open(cache, "w").write(text)                    # only cache a successful run
     text = re.sub(r"<\|[^|]*\|>", " ", text)          # strip <|LOC_x|> markers
     lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
     return [l for l in lines if l]
@@ -241,8 +252,45 @@ def restore_from_layer(vlm_text: str, base_words: dict) -> str:
     return " ".join(out)
 
 
-def extract(pdf, out_md, tessdata=None, workdir="/tmp/reader_ocr", ocr="auto"):
+def layer_word_map(base_lines: list[str]) -> dict:
+    """lowercased, punctuation-stripped word -> the layer's exact spelling."""
+    out = {}
+    for line in base_lines:
+        for w in line.split():
+            key = w.lower().strip(".,;:()[]\u201c\u201d\u2019'\"")
+            if key and key not in out and any(ord(c) > 127 for c in w):
+                out[key] = w
+    return out
+
+
+def _workdir(pdf: str, base: str = "/tmp/reader_ocr") -> str:
+    """Per-document scratch dir so two PDFs never share page images."""
+    import hashlib
+    with open(pdf, "rb") as f:
+        h = hashlib.sha1(f.read()).hexdigest()[:10]
+    stem = os.path.splitext(os.path.basename(pdf))[0]
+    return os.path.join(base, f"{stem}-{h}")
+
+
+def assemble(blocks: list) -> str:
+    """Join visual lines into paragraphs, breaking on pages and large y gaps."""
+    paras, cur, prev = [], [], None
+    for b in blocks:
+        t = b["text"].strip()
+        if not t:
+            continue
+        if prev is not None and (b["page"] != prev["page"] or b["y"] - prev["y"] > 18):
+            paras.append(" ".join(cur)); cur = []
+        cur.append(t)
+        prev = b
+    if cur:
+        paras.append(" ".join(cur))
+    return "\n\n".join(paras) + "\n"
+
+
+def extract(pdf, out_md, tessdata=None, workdir=None, ocr="auto"):
     doc = fitz.open(pdf)
+    workdir = workdir or _workdir(pdf)
     os.makedirs(workdir, exist_ok=True)
     blocks, kinds = [], {}
 
@@ -263,11 +311,14 @@ def extract(pdf, out_md, tessdata=None, workdir="/tmp/reader_ocr", ocr="auto"):
             if not os.path.exists(png) or os.path.getsize(png) == 0:
                 page.get_pixmap(dpi=OCR_DPI).save(png)
             if ocr == "vlm":                       # forced: use the stronger reader
-                vlm = " ".join(vlm_lines(png))
-                texts = restore_from_layer(vlm, layer_word_map(base_lines)).split("\n")
-                blocks.extend({"text": t, "x0": lines[0]["bbox"][0], "y": 0, "page": pno}
-                              for t in texts if t)
-                continue
+                vm = layer_word_map(base_lines)
+                vlm = vlm_lines(png)
+                if vlm:
+                    texts = [restore_from_layer(l, vm) for l in vlm]
+                    blocks.extend({"text": t, "x0": lines[0]["bbox"][0], "y": 0, "page": pno}
+                                  for t in texts if t)
+                    continue
+                print(f"  p{pno}: VLM empty, keeping text layer", file=sys.stderr)
             tsv = ocr_lines(png, tessdata)
             for i, l in enumerate(lines):
                 cand, bestd = None, 1e9
@@ -285,8 +336,11 @@ def extract(pdf, out_md, tessdata=None, workdir="/tmp/reader_ocr", ocr="auto"):
             png = os.path.join(workdir, f"p{pno:04d}.png")
             if not os.path.exists(png) or os.path.getsize(png) == 0:
                 page.get_pixmap(dpi=OCR_DPI).save(png)
-            vlm = "\n".join(vlm_lines(png))
-            texts = restore_from_layer(vlm, layer_word_map(base_lines)).splitlines()
+            vlm = vlm_lines(png)
+            if vlm:
+                texts = [restore_from_layer(l, layer_word_map(base_lines)) for l in vlm]
+            else:
+                print(f"  p{pno}: VLM empty, keeping text layer", file=sys.stderr)
 
         for i, t in enumerate(texts):
             if not t:
@@ -294,20 +348,14 @@ def extract(pdf, out_md, tessdata=None, workdir="/tmp/reader_ocr", ocr="auto"):
             blocks.append({"text": t, "x0": lines[i]["bbox"][0] if i < len(lines) else 100,
                            "y": lines[i]["y"] if i < len(lines) else 0, "page": pno})
 
+    with open(out_md, "w", encoding="utf-8") as f:
+        md = assemble(blocks)
+        f.write(md)
     print(f"  pages: {kinds}", file=sys.stderr)
+    return len(md.split())
 
 if __name__ == "__main__":
     pdf, out = sys.argv[1], sys.argv[2]
     td = sys.argv[3] if len(sys.argv) > 3 else None
     n = extract(pdf, out, td)
     print(f"{out}: {n} words")
-
-def layer_word_map(base_lines: list[str]) -> dict:
-    """lowercased, punctuation-stripped word -> the layer's exact spelling."""
-    out = {}
-    for line in base_lines:
-        for w in line.split():
-            key = w.lower().strip(".,;:()[]“”’'\"")
-            if key and key not in out and any(ord(c) > 127 for c in w):
-                out[key] = w
-    return out

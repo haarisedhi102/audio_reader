@@ -2,6 +2,8 @@
 # reader — one article in, one synced glasses book out.
 #
 #   ./reader add article.pdf --title "Title" --author "Name"
+#   ./reader add https://author.substack.com/p/slug
+#   ./reader pull https://author.substack.com/p/slug
 #   ./reader list
 #   ./reader publish [--dry-run|--stage-only]
 #   ./reader pack [--no-bump]      build + package the glasses app
@@ -18,6 +20,10 @@ case "${1:-}" in
   extract)
     shift
     exec "$PY" scripts/build_book.py "$@" --extract-only
+    ;;
+  pull)
+    shift
+    exec "$PY" scripts/fetch_substack.py "$@"
     ;;
   list)
     "$PY" - <<'EOF'

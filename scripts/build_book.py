@@ -17,12 +17,11 @@ os.chdir(ROOT)
 
 import narrate as N
 import llm
-from generate_audio import main as synth_book, MODEL
+from generate_audio import main as synth_book
 import make_cues_lib as M
 
 LIB = ROOT / "library"
 AUDIO = ROOT / "audio"
-SCRATCH = Path(os.environ.get("COMMANDCODE_SCRATCHPAD", "/tmp"))
 
 def slug(s: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
@@ -59,11 +58,12 @@ def build_narration(md: Path, out_txt: Path) -> int:
 
     paras = []
     for b in blocks:
-        t = N.spoken(b)
+        t = N.prepare(b)
         if not t:
             continue
-        paras.append(N.apply_lexicon(t))
+        paras.append(t)
     out_txt.write_text("\n\n".join(paras))
+    N.report_dropped()
     return sum(len(p.split()) for p in paras)
 
 def main() -> None:
@@ -72,23 +72,26 @@ def main() -> None:
     ap.add_argument("--title")
     ap.add_argument("--author", default="")
     ap.add_argument("--id")
-    ap.add_argument("--voice", default=str(SCRATCH / "tts_test/ref_000.wav"))
-    ap.add_argument("--voice-text", default=str(SCRATCH / "ref.txt"))
     ap.add_argument("--extract-only", action="store_true")
-    ap.add_argument("--polish", action="store_true",
-                    help="let the LLM repair mechanical damage (opt-in, edit-gated)")
     ap.add_argument("--ocr", default="auto", choices=["auto", "tesseract", "vlm"])
     ap.add_argument("--no-llm", action="store_true", help="skip all LLM stages")
     ap.add_argument("--re-extract", action="store_true",
                     help="replace a book whose transcript was hand-verified")
     args = ap.parse_args()
 
-    src = Path(args.source).expanduser().resolve()
-    if not src.exists():
-        sys.exit(f"no such file: {src}")
+    pulled = {}
+    if args.source.startswith(("http://", "https://")):
+        from fetch_substack import pull
+        pulled = pull(args.source)
+        src = pulled["path"]
+        print(f"[0/5] pulled {src.name}  ({pulled['words']} words)")
+    else:
+        src = Path(args.source).expanduser().resolve()
+        if not src.exists():
+            sys.exit(f"no such file: {src}")
 
-    title = args.title or re.sub(r"[_-]+", " ", src.stem).strip()
-    author = args.author
+    title = args.title or pulled.get("title") or re.sub(r"[_-]+", " ", src.stem).strip()
+    author = args.author or pulled.get("author", "")
     bid = args.id or slug(title)
 
     index_path0 = ROOT / "library" / "index.json"
@@ -105,26 +108,17 @@ def main() -> None:
 
     print(f"[1/5] extract  {src.name}")
     extract(src, md)
-    if llm.available() and not args.no_llm:
+    if llm.available() and not args.no_llm and not pulled.get("title"):
         meta = llm.metadata(md.read_text())
         if not args.title and meta.get("title"):
             title = meta["title"]; bid = args.id or slug(title)
         if not author and meta.get("author"):
             author = meta["author"]
         print(f"      llm metadata: {title!r} / {author!r}")
-    if args.polish and not args.no_llm:
-        if not llm.available():
-            print("      polish skipped: no LLM key in .env")
-        else:
-            print("      polish: repair pass (edit-gated)")
-            fixed, changes = llm.repair(md.read_text())
-            md.write_text(fixed)
-            (work / "changes.json").write_text(json.dumps(changes, indent=1))
-            print(f"      {len(changes)} accepted edits -> changes.json")
     words = len(md.read_text().split())
     print(f"      {words} words -> {md}")
 
-    if llm.available() and not args.no_llm:
+    if (src.suffix.lower() == ".pdf" and llm.available() and not args.no_llm):
         print("[2/5] listenability  (symbol/abbrev expansion, artefact removal)")
         text = md.read_text()
         spoken, edits = llm.speakable(text, verbose=True)
@@ -136,20 +130,6 @@ def main() -> None:
     print("[2/5] narrate")
     narration = work / "narration.txt"
     nwords = build_narration(md, narration)
-    if llm.available():
-        import re as _re
-        foreign = sorted({w for w in _re.findall(r"[^\W\d_]+", narration.read_text())
-                          if any(ord(c) > 127 for c in w)} - set(N.LEX))
-        if foreign:
-            say = llm.respell_terms(foreign[:40])
-            if say:
-                text = narration.read_text()
-                for term, resp in say.items():
-                    if resp and any(ord(c) > 127 for c in term):
-                        text = text.replace(term, resp)
-                narration.write_text(text)
-                (work / "lexicon.json").write_text(json.dumps(say, indent=1, ensure_ascii=False))
-                print(f"      llm respelled {len(say)} terms -> lexicon.json")
     print(f"      {nwords} spoken words")
 
     if args.extract_only:
@@ -157,11 +137,7 @@ def main() -> None:
         return
 
     print("[3/5] synthesise (cached chunks are reused)")
-    ref = Path(args.voice)
-    ref_text = Path(args.voice_text).read_text().strip() if Path(args.voice_text).exists() else ""
-    if not ref.exists():
-        sys.exit(f"voice reference missing: {ref}")
-    synth_book(str(narration), bid, str(ref), ref_text)
+    synth_book(str(narration), bid)
 
     print("[4/5] normalise")
     wav = AUDIO / f"{bid}.wav"
@@ -174,7 +150,7 @@ def main() -> None:
     LIB.mkdir(exist_ok=True)
     book_dir = LIB / bid
     book_dir.mkdir(exist_ok=True)
-    cues = M.build(str(narration), bid)
+    cues = M.build(bid)
     json.dump({"tag": bid, "cues": cues}, open(book_dir / "cues_0.json", "w"))
     for ext in (".m4a", ".mp3"):
         f = AUDIO / f"{bid}{ext}"

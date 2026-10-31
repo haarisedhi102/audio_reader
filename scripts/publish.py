@@ -54,7 +54,7 @@ def encode(src: Path, dst: Path) -> bool:
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
              "-c:a", encoder(), "-b:a", BITRATE, "-ac", "1", "-ar", "44100",
-             "-movflags", "+faststart", str(tmp)],
+             "-movflags", "+faststart", "-f", "mp4", str(tmp)],
             check=True,
         )
         tmp.replace(dst)
@@ -124,12 +124,12 @@ def sync(dry: bool, reupload: bool = False) -> None:
         "--header-upload", "Cache-Control: public, max-age=86400",
     ], check=True)
     subprocess.run(common + [
-        "--include", "*.json", "--exclude", "index.json",
+        "--filter", "- index.json", "--filter", "+ *.json",
         "--header-upload", "Content-Type: application/json",
         "--header-upload", "Cache-Control: public, max-age=86400",
     ], check=True)
     subprocess.run(common + [
-        "--include", "index.json",
+        "--include", "index.json", "--ignore-times",
         "--header-upload", "Content-Type: application/json",
         "--header-upload", "Cache-Control: no-cache",
     ], check=True)
