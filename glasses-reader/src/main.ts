@@ -8,7 +8,7 @@ import {
   MenuItemProperty,
 } from '@evenrealities/even_hub_sdk'
 import { loadLibrary, loadCues, audioUrl, type Book, type Track, type Cue } from './library'
-import { wrapText } from './wrap'
+import { clipText, wrapText } from './wrap'
 
 declare const __APP_VERSION__: string
 
@@ -56,9 +56,12 @@ function cueAt(cues: Cue[], t: number): number {
 const audio = new Audio()
 audio.preload = 'auto'
 
-type SavedPos = { id?: string; track?: number; offset?: number }
-let saved: SavedPos = {}
+type LastPlayed = { id?: string; track?: number }
+let last: LastPlayed = {}
+const positions = new Map<string, number>()
 let storageStatus = 'unknown'
+
+const posKey = (bookId: string, trackIdx: number) => `${bookId}:${trackIdx}`
 
 const qs = new URLSearchParams(location.search)
 console.log('[glasses-reader] url', location.href)
@@ -72,7 +75,15 @@ let model: TrackModel = { lines: [], cueFirst: [], cueLines: [] }
 let windowStart = -1
 let activeLine = -1
 let resumeNote = ''
+let resumePending = false
 let screenOff = false
+
+// "read" is the teleprompter; the others drive the on-glasses library picker
+type Mode = 'read' | 'books' | 'tracks'
+let mode: Mode = 'read'
+let pickIndex = 0
+let pickBook = 0
+let wasPlaying = false
 
 const el = {
   status: () => document.getElementById('status')!,
@@ -122,12 +133,27 @@ const store = {
 async function loadSaved() {
   const raw = await store.get('reader.pos')
   if (raw) {
-    try { saved = JSON.parse(raw) } catch { saved = {} }
+    try {
+      const data = JSON.parse(raw) as {
+        last?: LastPlayed
+        positions?: Record<string, number>
+        // legacy single-position format
+        id?: string; track?: number; offset?: number
+      }
+      if (data.positions || data.last) {
+        last = data.last ?? {}
+        for (const [k, v] of Object.entries(data.positions ?? {})) positions.set(k, Number(v))
+      } else if (data.id) {
+        // migrate the old one-article format
+        last = { id: data.id, track: data.track ?? 0 }
+        if (Number.isFinite(Number(data.offset))) positions.set(posKey(data.id, data.track ?? 0), Number(data.offset))
+      }
+    } catch { last = {} }
   }
   storageStatus = (await store.set('reader.probe', '1')) ? (bridge ? 'native' : 'localStorage') : 'unavailable'
-  if (!qs.get('track')) trackIndex = Number(saved.track ?? 0)
+  if (!qs.get('track')) trackIndex = Number(last.track ?? 0)
   console.log('[glasses-reader] build', __APP_VERSION__, 'storage', storageStatus,
-              'saved', JSON.stringify(saved))
+              'last', JSON.stringify(last), 'positions', positions.size)
 }
 await loadSaved()
 
@@ -152,11 +178,12 @@ async function createContainers() {
     content: HINT, isEventCapture: 0, textColor: 2,
   })
   // The OS owns tap-then-hold, so the reliable way to reach "hide" from the
-  // glasses is an item in that menu. 1 = hide, 2 = show.
+  // glasses is an item in that menu. 1 = hide, 2 = show, 4 = library.
   const menu = new MenuContainerProperty({
     menuItems: [
       new MenuItemProperty({ itemID: 1, itemName: 'Hide text' }),
       new MenuItemProperty({ itemID: 2, itemName: 'Show text' }),
+      new MenuItemProperty({ itemID: 4, itemName: 'Library' }),
       new MenuItemProperty({ itemID: 3, itemName: 'Exit' }),
     ],
   })
@@ -213,11 +240,12 @@ function fmt(sec: number) {
 }
 
 function renderChrome() {
-  if (!track) return
+  if (!track || mode !== 'read') return
   const book = books[bookIndex]
   const label = book.tracks.length > 1 ? `${track.title} — ` : ''
   const header = `${label}${fmt(audio.currentTime)} / ${fmt(audio.duration || 0)}`
   if (!screenOff) push(1, 'header', header.length > 95 ? header.slice(0, 95) : header)
+  if (!screenOff) push(3, 'footer', HINT)
   if (!screenOff) {
     el.status().textContent =
       `${book.title} · ${track.title}${resumeNote}` +
@@ -230,7 +258,7 @@ function renderChrome() {
 }
 
 function renderLines(force = false) {
-  if (!track) return
+  if (!track || mode !== 'read') return
   const cues = track.cuesData
   const t = audio.currentTime
   const ci = cueAt(cues, t)
@@ -258,10 +286,11 @@ function renderLines(force = false) {
 }
 
 function applyStartOffset(offset: number) {
-  if (!(offset > 0)) return
+  if (!(offset > 0)) { resumePending = false; return }
   const set = () => {
     const d = audio.duration
     audio.currentTime = Number.isFinite(d) && d > 1 ? Math.min(offset, d - 1) : offset
+    resumePending = false
     renderLines(true)
     renderChrome()
   }
@@ -272,9 +301,13 @@ function applyStartOffset(offset: number) {
 
 let verifiedStore = false
 function savePos() {
-  if (!track) return
+  if (!track || resumePending) return
+  const bookId = books[bookIndex].id
+  positions.set(posKey(bookId, trackIndex), Math.floor(audio.currentTime))
+  last = { id: bookId, track: trackIndex }
   const payload = JSON.stringify({
-    id: books[bookIndex].id, track: trackIndex, offset: Math.floor(audio.currentTime),
+    last,
+    positions: Object.fromEntries(positions),
   })
   void store.set('reader.pos', payload).then(async ok => {
     if (verifiedStore) return
@@ -287,11 +320,22 @@ function savePos() {
 }
 
 async function select(bookIdx: number, trackIdx = 0, autoplay = false) {
+  // persist the outgoing track's position before its state is replaced
+  if (track) savePos()
+  // suppress autosaves across the swap: bookIndex/trackIndex change before the
+  // new audio is loaded, so a tick here would file the old time under the new key
+  resumePending = true
   bookIndex = bookIdx
   trackIndex = trackIdx
   const book = books[bookIndex]
   const ref = book.tracks[trackIndex]
-  const cues = await loadCues(book, ref)
+  let cues: Cue[]
+  try {
+    cues = await loadCues(book, ref)
+  } catch (e) {
+    resumePending = false
+    throw e
+  }
   track = { ...ref, cuesData: cues }
   model = buildModel(cues)
   windowStart = -1
@@ -300,11 +344,13 @@ async function select(bookIdx: number, trackIdx = 0, autoplay = false) {
   audio.src = audioUrl(book, ref)
   const resume = Number.isFinite(startAt)
     ? startAt
-    : saved.id === book.id && saved.track === trackIdx ? Number(saved.offset ?? 0) : 0
+    : Number(positions.get(posKey(book.id, trackIdx)) ?? 0)
   if (resume > 0) console.log('[glasses-reader] resume', book.id, trackIdx, resume)
   resumeNote = resume > 0 ? ` · resumed ${fmt(resume)}` : ''
+  resumePending = resume > 0
   applyStartOffset(resume)
   if (autoplay) void audio.play().catch(() => {})
+  last = { id: book.id, track: trackIdx }
 
   document.querySelectorAll('.book').forEach(n => n.classList.remove('on'))
   document.querySelector(`[data-book="${bookIdx}"]`)?.classList.add('on')
@@ -325,6 +371,93 @@ function seek(delta: number) {
   renderChrome()
 }
 
+// ---------------------------------------------------------------- library picker
+// Lets you switch articles from the glasses alone: OS menu ▸ Library, swipe to
+// move, tap to open, long-press to go back. Multi-part books open a track list.
+const PICK_HINT = 'swipe move · tap open · hold back'
+
+function openLibrary() {
+  if (!books.length) return
+  if (screenOff) setScreenOff(false)
+  wasPlaying = !audio.paused
+  audio.pause()
+  mode = 'books'
+  pickIndex = Math.max(0, bookIndex)
+  console.log('[glasses-reader] picker open books', pickIndex, books[pickIndex].id)
+  renderPicker()
+}
+
+function closePicker(restorePlayback = true) {
+  mode = 'read'
+  windowStart = -1
+  activeLine = -1
+  renderChrome()
+  renderLines(true)
+  if (restorePlayback && wasPlaying) void audio.play().catch(() => {})
+  wasPlaying = false
+}
+
+function pickItems(): string[] {
+  if (mode === 'tracks') return books[pickBook].tracks.map(t => t.title)
+  return books.map(b => b.title)
+}
+
+function renderPicker() {
+  if (mode === 'read') return
+  const items = pickItems()
+  const label = mode === 'books' ? 'Library' : books[pickBook].title
+  const list: string[] = []
+  const maxStart = Math.max(0, items.length - VISIBLE_LINES)
+  const start = Math.min(maxStart, Math.max(0, pickIndex - Math.floor(VISIBLE_LINES / 2)))
+  for (let i = start; i < Math.min(items.length, start + VISIBLE_LINES); i++) {
+    const prefix = i === pickIndex ? '> ' : '  '
+    const suffix = mode === 'books' && books[i].tracks.length > 1 ? ' ›' : ''
+    list.push(prefix + clipText(items[i], INNER_W - MARK_W - 12) + suffix)
+  }
+  if (!screenOff) {
+    push(1, 'header', clipText(`${label} ${pickIndex + 1}/${items.length}`, INNER_W))
+    push(2, 'body', list.join('\n'))
+    push(3, 'footer', PICK_HINT)
+  }
+  el.status().textContent = `menu · ${label} — ${items[pickIndex]}`
+}
+
+function pickMove(delta: number) {
+  const n = pickItems().length
+  pickIndex = Math.max(0, Math.min(n - 1, pickIndex + delta))
+  renderPicker()
+}
+
+function pickActivate() {
+  if (mode === 'books') {
+    const book = books[pickIndex]
+    console.log('[glasses-reader] picker activate book', pickIndex, book.id, book.tracks.length)
+    if (book.tracks.length > 1) {
+      pickBook = pickIndex
+      pickIndex = last.id === book.id ? Math.min(book.tracks.length - 1, Number(last.track ?? 0)) : 0
+      mode = 'tracks'
+      renderPicker()
+      return
+    }
+    void select(pickIndex, 0, false).then(() => closePicker(false))
+    return
+  }
+  const book = pickBook
+  const trackIdx = pickIndex
+  console.log('[glasses-reader] picker activate track', book, trackIdx)
+  void select(book, trackIdx, false).then(() => closePicker(false))
+}
+
+function pickBack() {
+  if (mode === 'tracks') {
+    mode = 'books'
+    pickIndex = pickBook
+    renderPicker()
+    return
+  }
+  closePicker()
+}
+
 // ---------------------------------------------------------------- events
 function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeList | null {
   if (!envelope) return null
@@ -340,10 +473,12 @@ if (bridge) {
     if (menuItem !== undefined) console.log('[glasses-reader] menu item', menuItem)
     if (menuItem === 1) { setScreenOff(true); return }
     if (menuItem === 2) { setScreenOff(false); return }
+    if (menuItem === 4) { openLibrary(); return }
     if (menuItem === 3) { bridge!.shutDownPageContainer(1); return }
     if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
       // coming back from the menu: repaint whatever the current state is
-      if (screenOff) setScreenOff(true)
+      if (mode !== 'read') renderPicker()
+      else if (screenOff) setScreenOff(true)
       else { renderChrome(); renderLines(true) }
       return
     }
@@ -355,6 +490,16 @@ if (bridge) {
     // the release half of a long press is not an input of its own
     if (sysType === OsEventTypeList.LONG_PRESS_RELEASE_EVENT ||
         textType === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) return
+    // in the picker: swipe moves, tap opens, long-press goes back
+    if (mode !== 'read') {
+      if (sysType === OsEventTypeList.LONG_PRESS_EVENT || textType === OsEventTypeList.LONG_PRESS_EVENT) {
+        pickBack(); return
+      }
+      if (textType === OsEventTypeList.SCROLL_TOP_EVENT) { pickMove(-1); return }
+      if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) { pickMove(1); return }
+      if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) pickActivate()
+      return
+    }
     if (sysType === OsEventTypeList.LONG_PRESS_EVENT || textType === OsEventTypeList.LONG_PRESS_EVENT) {
       setScreenOff(!screenOff)
       return
@@ -425,7 +570,7 @@ if (!books.length) {
 const qBook = qs.get('book')
 bookIndex = qBook
   ? Math.max(0, books.findIndex(b => b.id === qBook))
-  : Math.max(0, books.findIndex(b => b.id === saved.id))
+  : Math.max(0, books.findIndex(b => b.id === last.id))
 renderBookList()
 await select(bookIndex, Math.min(trackIndex, books[bookIndex].tracks.length - 1), false)
 if (qs.get('hidden') !== null) setScreenOff(true)

@@ -6,6 +6,18 @@ import { getTextWidth } from '@evenrealities/pretext'
  * line count, not the lines themselves, so we wrap ourselves and use the
  * measurement to verify.
  */
+/** Fit a single line by trimming and appending an ellipsis (menu labels). */
+export function clipText(text: string, maxWidth: number): string {
+  if (getTextWidth(text) <= maxWidth) return text
+  const ellipsis = '…'
+  let out = ''
+  for (const ch of text) {
+    if (getTextWidth(out + ch + ellipsis) > maxWidth) break
+    out += ch
+  }
+  return out + ellipsis
+}
+
 export function wrapText(text: string, maxWidth: number): string[] {
   const words = text.split(/\s+/).filter(Boolean)
   const lines: string[] = []

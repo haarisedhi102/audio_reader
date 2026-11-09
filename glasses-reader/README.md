@@ -64,8 +64,20 @@ Useful query params: `?book=thesis&track=2&seek=300`
 | Tap | play / pause |
 | Swipe up / down | seek −30 s / +30 s |
 | Long-press | hide/show the text — playback continues; any tap brings it back |
-| Menu (from the glasses' own long-press) | Hide text / Show text / Exit — the phone's `hide` button always works, even if the OS claims the press |
+| Menu (from the glasses' own long-press) | Hide text / Show text / Library / Exit — the phone's `hide` button always works, even if the OS claims the press |
 | Double-tap | exit |
+
+## Picking an article without the phone
+
+Open the glasses menu ▸ **Library** to switch articles from the display alone —
+no phone needed. The current article is pre-selected; positions are restored
+per article and per part.
+
+| Input | Action |
+|---|---|
+| Swipe up / down | move the selection |
+| Tap | open the highlighted article (multi-part books open a part list) |
+| Long-press | back one level, or return to reading |
 
 ## Layout on the glasses
 
